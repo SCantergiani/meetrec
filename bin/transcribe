@@ -24,4 +24,5 @@ base=${file%.*}
 diarize "$file" "$base.tsv" $([[ $speakers == auto ]] || echo "$speakers")
 # tsv rows: start_ms end_ms text speaker
 awk -F'\t' 'NR>1 { s = int($1 / 1000); printf "[%02d:%02d:%02d] %s: %s\n", s / 3600, s % 3600 / 60, s % 60, $4, $3 }' "$base.tsv" >"$base-speakers.txt"
-echo "Transcript: $base-speakers.txt"
+cat "$base-speakers.txt"
+echo "Saved: $base-speakers.txt"
