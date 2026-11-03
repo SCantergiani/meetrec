@@ -40,16 +40,52 @@ audio, tsv = sys.argv[1], Path(sys.argv[2])
 num = int(sys.argv[3]) if len(sys.argv) > 3 else -1
 threads = min(8, os.cpu_count() or 1)
 
+emb_cfg = sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(EMB), num_threads=threads)
+# Forcing exactly `num` clusters is unstable on long files: a few seconds of noise can take a slot and
+# two real voices get merged (same 55-min interview: 10% vs 99% "A" from near-identical decodes).
+# So over-cluster, keep the `num` clusters with the most speech, fold the rest into the closest voice.
 sd = sherpa_onnx.OfflineSpeakerDiarization(sherpa_onnx.OfflineSpeakerDiarizationConfig(
     segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
         pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(model=str(SEG)), num_threads=threads),
-    embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(EMB), num_threads=threads),
-    clustering=sherpa_onnx.FastClusteringConfig(num_clusters=num, threshold=THRESHOLD),
+    embedding=emb_cfg,
+    clustering=sherpa_onnx.FastClusteringConfig(num_clusters=num + 3 if num > 0 else -1, threshold=THRESHOLD),
     min_duration_on=0.3, min_duration_off=0.5,
 ))
-pcm = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", audio, "-ac", "1", "-ar", str(sd.sample_rate), "-f", "f32le", "-"],
-                     capture_output=True, check=True).stdout
-turns = [(t.start * 1000, t.end * 1000, t.speaker) for t in sd.process(np.frombuffer(pcm, np.float32)).sort_by_start_time()]
+sr = sd.sample_rate
+pcm = np.frombuffer(subprocess.run(["ffmpeg", "-loglevel", "error", "-i", audio, "-ac", "1", "-ar", str(sr), "-f", "f32le", "-"],
+                                   capture_output=True, check=True).stdout, np.float32)
+
+
+def progress(done, total):
+    print(f"\rDetecting speakers... {100 * done // total}%", end="", file=sys.stderr, flush=True)
+    return 0
+
+
+turns = [(t.start * 1000, t.end * 1000, t.speaker) for t in sd.process(pcm, callback=progress).sort_by_start_time()]
+print(file=sys.stderr)
+
+if num > 0:
+    dur = {}
+    for s, e, k in turns:
+        dur[k] = dur.get(k, 0) + e - s
+    big = sorted(dur, key=dur.get, reverse=True)[:num]
+    ext = sherpa_onnx.SpeakerEmbeddingExtractor(emb_cfg)
+
+    def voice(k):
+        """Mean-direction embedding of up to 60 s of cluster k's speech."""
+        audio_k = np.concatenate([pcm[int(s * sr / 1000):int(e * sr / 1000)] for s, e, c in turns if c == k])[:60 * sr]
+        st = ext.create_stream()
+        st.accept_waveform(sr, audio_k)
+        st.input_finished()
+        v = np.array(ext.compute(st))
+        return v / np.linalg.norm(v)
+
+    centroid = {k: voice(k) for k in dur}
+    merge = {k: k if k in big else max(big, key=lambda b: centroid[k] @ centroid[b]) for k in dur}
+    turns = [(s, e, merge[k]) for s, e, k in turns]
+# letters by order of first appearance: A = first person to talk
+order = {k: i for i, k in enumerate(dict.fromkeys(k for _, _, k in turns))}
+turns = [(s, e, order[k]) for s, e, k in turns]
 
 
 def speaker(start, end):
