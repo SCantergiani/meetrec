@@ -17,7 +17,7 @@ else
     dev=(--device cpu --compute_type int8)
 fi
 whisper-ctranslate2 "$file" --model "$model" "${dev[@]}" \
-    --vad_filter True --condition_on_previous_text False \
+    --vad_filter True --condition_on_previous_text False --word_timestamps True \
     --output_format all --output_dir "$(dirname "$file")"
 [[ $speakers == 1 ]] && exit
 base=${file%.*}

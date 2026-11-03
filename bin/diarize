@@ -6,9 +6,11 @@
 """Add a speaker column (A, B, ...) to a whisper .tsv by clustering voice embeddings. Fully local, CPU.
 
 usage: diarize AUDIO TSV [NUM_SPEAKERS]   (rewrites TSV in place; NUM_SPEAKERS omitted = auto)
+If the sibling .json has word timestamps, rows are split at the word where the speaker changes.
 Models: pyannote segmentation 3.0 + 3D-Speaker ERes2Net (sherpa-onnx ONNX exports, ungated),
 downloaded to ~/.cache/sherpa-onnx on first run.
 """
+import json
 import os
 import subprocess
 import sys
@@ -68,10 +70,33 @@ def speaker(start, end):
     return chr(65 + min((k for k in cover if cover[k] >= 0.9 * top), key=shortest.get))
 
 
-header, *rows = tsv.read_text().splitlines()
-out = [header.split("\t")[:3] + ["speaker"]]
-for r in rows:
-    c = r.split("\t")[:3]
-    out.append(c + [speaker(int(c[0]), int(c[1]))])
+out = [["start", "end", "text", "speaker"]]
+js = tsv.with_suffix(".json")
+if js.exists():
+    # label each word (needs --word_timestamps) and split a segment wherever the speaker changes
+    for seg in json.loads(js.read_text())["segments"]:
+        words = seg.get("words") or [{"start": seg["start"], "end": seg["end"], "word": seg["text"]}]
+        spans = [(int(w["start"] * 1000), int(w["end"] * 1000)) for w in words]
+        labels = [speaker(s, e) for s, e in spans]
+        runs = [[labels[0], 0, 1]]  # [speaker, first word, end word]
+        for j, spk in enumerate(labels[1:], 1):
+            if spk == runs[-1][0] or spk == "?":  # "?" = word in a gap between turns: keep current speaker
+                runs[-1][2] = j + 1
+            else:
+                runs.append([spk, j, j + 1])
+        # turn boundaries are only ~0.3 s accurate: a 1-2 word run inside a segment joins its neighbour
+        for k, r in enumerate(runs):
+            if len(runs) > 1 and r[2] - r[1] <= 2:
+                r[0] = runs[k - 1][0] if k else runs[1][0]
+        for spk, a, b in runs:
+            if out[-1][3] == spk and out[-1][4] is seg:
+                out[-1][1], out[-1][2] = spans[b - 1][1], out[-1][2] + "".join(w["word"] for w in words[a:b])
+            else:
+                out.append([spans[a][0], spans[b - 1][1], "".join(w["word"] for w in words[a:b]), spk, seg])
+    out = [[str(c).strip() for c in r[:4]] for r in out]
+else:
+    for r in tsv.read_text().splitlines()[1:]:
+        c = r.split("\t")[:3]
+        out.append(c + [speaker(int(c[0]), int(c[1]))])
 tsv.write_text("\n".join("\t".join(c) for c in out) + "\n")
 print(f"{tsv}: {len({t[2] for t in turns})} speakers")
