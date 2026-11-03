@@ -11,8 +11,7 @@ ffmpeg -hide_banner -loglevel warning -stats \
     -f pulse -i default -f pulse -i "$(pactl get-default-sink).monitor" \
     -map 0:a -ac 1 -c:a libopus -b:a 48k "$base-me.ogg" \
     -map 1:a -ac 1 -c:a libopus -b:a 48k "$base-them.ogg"
-transcribe "$base-me.ogg" ${1:+"$1"}
-transcribe "$base-them.ogg" ${1:+"$1"}
-# split "Them" into Them A/B/... by voice (local model)
-diarize "$base-them.ogg" "$base-them.tsv" ${2:+"$2"}
+# mic is only you; system audio gets split into Them A/B/... by voice
+transcribe "$base-me.ogg" 1 ${1:+"$1"}
+transcribe "$base-them.ogg" "${2:-auto}" ${1:+"$1"}
 meetmerge "$base"

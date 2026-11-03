@@ -35,13 +35,17 @@ meetrec "" 3             # 3 people on the other side (more reliable than auto-d
 meetrec large-v3-turbo   # faster model
 ```
 
-Individual steps:
+Any existing audio/video file:
 
 ```sh
-transcribe file.ogg [model]                 # .txt/.srt/.vtt/.tsv/.json next to the file
-diarize file.ogg file.tsv [num_speakers]    # adds a speaker column to the .tsv
-meetmerge ~/Recordings/meeting-DATE         # BASE-me.tsv + BASE-them.tsv → BASE.txt
+transcribe call.m4a                  # → call-speakers.txt ("[00:01:05] A: ..."), 2 speakers
+transcribe call.m4a 3                # 3 people (or "auto" to guess; unreliable on short files)
+transcribe call.m4a 1                # just text, no speaker labels
+transcribe call.m4a 2 large-v3-turbo # faster model
 ```
+
+Also writes `call.txt/.srt/.vtt/.tsv/.json`. Lower-level: `diarize FILE TSV [N]` adds a speaker
+column to a whisper .tsv; `meetmerge BASE` merges `BASE-me.tsv` + `BASE-them.tsv` → `BASE.txt`.
 
 Recordings go to `~/Recordings`; override with `MEETREC_DIR`.
 

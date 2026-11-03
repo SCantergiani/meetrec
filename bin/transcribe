@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# Transcribe audio/video with faster-whisper: transcribe FILE [MODEL]
-# Writes .txt/.srt/.vtt/.tsv/.json next to FILE. GPU if nvidia-smi exists, else CPU.
+# Transcribe audio/video and label speakers: transcribe FILE [SPEAKERS] [MODEL]
+#   SPEAKERS: number of people (default 2), "auto" or 1 to skip speaker labels
+#   MODEL:    whisper model (default large-v3)
+# Writes .txt/.srt/.vtt/.tsv/.json next to FILE, plus FILE-speakers.txt ("[00:01:05] A: ...").
+# GPU if nvidia-smi exists, else CPU.
 set -euo pipefail
-file=${1:?usage: transcribe FILE [MODEL]}
-model=${2:-large-v3}
+file=${1:?usage: transcribe FILE [SPEAKERS] [MODEL]}
+speakers=${2:-2}
+model=${3:-large-v3}
 if command -v nvidia-smi >/dev/null; then
     # CUDA 12 / cuDNN 9 come as pip wheels inside the uv tool venv (no system CUDA needed)
     nv=$(echo "$(uv tool dir)"/whisper-ctranslate2/lib/python*/site-packages/nvidia)
@@ -12,6 +16,12 @@ if command -v nvidia-smi >/dev/null; then
 else
     dev=(--device cpu --compute_type int8)
 fi
-exec whisper-ctranslate2 "$file" --model "$model" "${dev[@]}" \
+whisper-ctranslate2 "$file" --model "$model" "${dev[@]}" \
     --vad_filter True --condition_on_previous_text False \
     --output_format all --output_dir "$(dirname "$file")"
+[[ $speakers == 1 ]] && exit
+base=${file%.*}
+diarize "$file" "$base.tsv" $([[ $speakers == auto ]] || echo "$speakers")
+# tsv rows: start_ms end_ms text speaker
+awk -F'\t' 'NR>1 { s = int($1 / 1000); printf "[%02d:%02d:%02d] %s: %s\n", s / 3600, s % 3600 / 60, s % 60, $4, $3 }' "$base.tsv" >"$base-speakers.txt"
+echo "Transcript: $base-speakers.txt"
