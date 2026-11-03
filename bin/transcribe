@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Transcribe audio/video with faster-whisper: transcribe FILE [MODEL]
+# Writes .txt/.srt/.vtt/.tsv/.json next to FILE. GPU if nvidia-smi exists, else CPU.
+set -euo pipefail
+file=${1:?usage: transcribe FILE [MODEL]}
+model=${2:-large-v3}
+if command -v nvidia-smi >/dev/null; then
+    # CUDA 12 / cuDNN 9 come as pip wheels inside the uv tool venv (no system CUDA needed)
+    nv=$(echo "$(uv tool dir)"/whisper-ctranslate2/lib/python*/site-packages/nvidia)
+    export LD_LIBRARY_PATH="$nv/cublas/lib:$nv/cudnn/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    dev=(--device cuda --compute_type float16)
+else
+    dev=(--device cpu --compute_type int8)
+fi
+exec whisper-ctranslate2 "$file" --model "$model" "${dev[@]}" \
+    --vad_filter True --condition_on_previous_text False \
+    --output_format all --output_dir "$(dirname "$file")"

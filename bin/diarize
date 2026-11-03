@@ -1,0 +1,68 @@
+#!/usr/bin/env -S uv run -q --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["sherpa-onnx", "numpy"]
+# ///
+"""Add a speaker column (A, B, ...) to a whisper .tsv by clustering voice embeddings. Fully local, CPU.
+
+usage: diarize AUDIO TSV [NUM_SPEAKERS]   (rewrites TSV in place; NUM_SPEAKERS omitted = auto)
+Models: pyannote segmentation 3.0 + 3D-Speaker ERes2Net (sherpa-onnx ONNX exports, ungated),
+downloaded to ~/.cache/sherpa-onnx on first run.
+"""
+import os
+import subprocess
+import sys
+import tarfile
+import urllib.request
+from pathlib import Path
+
+import numpy as np
+import sherpa_onnx
+
+M = Path.home() / ".cache/sherpa-onnx"
+R = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
+SEG = M / "sherpa-onnx-pyannote-segmentation-3-0/model.onnx"
+EMB = M / "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
+# ponytail: auto-count threshold tuned on one 40-min 2-person call (1.0-1.1 over-split into 14-28,
+# 1.3 -> 2). Fragile: on a 3-min clip 1.3 merged both speakers into one. Pass NUM_SPEAKERS when known.
+THRESHOLD = 1.3
+
+M.mkdir(parents=True, exist_ok=True)
+if not SEG.exists():
+    with urllib.request.urlopen(f"{R}/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2") as f:
+        tarfile.open(fileobj=f, mode="r|bz2").extractall(M, filter="data")
+if not EMB.exists():
+    urllib.request.urlretrieve(f"{R}/speaker-recongition-models/{EMB.name}", EMB)
+
+audio, tsv = sys.argv[1], Path(sys.argv[2])
+num = int(sys.argv[3]) if len(sys.argv) > 3 else -1
+threads = min(8, os.cpu_count() or 1)
+
+sd = sherpa_onnx.OfflineSpeakerDiarization(sherpa_onnx.OfflineSpeakerDiarizationConfig(
+    segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
+        pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(model=str(SEG)), num_threads=threads),
+    embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(EMB), num_threads=threads),
+    clustering=sherpa_onnx.FastClusteringConfig(num_clusters=num, threshold=THRESHOLD),
+    min_duration_on=0.3, min_duration_off=0.5,
+))
+pcm = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", audio, "-ac", "1", "-ar", str(sd.sample_rate), "-f", "f32le", "-"],
+                     capture_output=True, check=True).stdout
+turns = [(t.start * 1000, t.end * 1000, t.speaker) for t in sd.process(np.frombuffer(pcm, np.float32)).sort_by_start_time()]
+
+
+def speaker(start, end):
+    """Speaker with the most overlap with this transcript row."""
+    overlap = {}
+    for s, e, spk in turns:
+        overlap[spk] = overlap.get(spk, 0) + max(0, min(end, e) - max(start, s))
+    best = max(overlap, key=overlap.get, default=None)
+    return chr(65 + best) if best is not None and overlap[best] > 0 else "?"
+
+
+header, *rows = tsv.read_text().splitlines()
+out = [header.split("\t")[:3] + ["speaker"]]
+for r in rows:
+    c = r.split("\t")[:3]
+    out.append(c + [speaker(int(c[0]), int(c[1]))])
+tsv.write_text("\n".join("\t".join(c) for c in out) + "\n")
+print(f"{tsv}: {len({t[2] for t in turns})} speakers")

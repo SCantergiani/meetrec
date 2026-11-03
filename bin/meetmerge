@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Merge BASE-me.tsv + BASE-them.tsv into BASE.txt, ordered by time with speaker labels: meetmerge BASE
+set -euo pipefail
+base=${1:?usage: meetmerge BASE}
+# tsv rows: start_ms end_ms text [speaker from diarize] (header on line 1)
+awk -F'\t' 'FNR>1 { printf "%s\t%s\t%s\n", $1, (FILENAME ~ /-me\.tsv$/ ? "Me" : "Them" ($4 != "" ? " " $4 : "")), $3 }' "$base-me.tsv" "$base-them.tsv" \
+    | sort -n \
+    | awk -F'\t' '{ s = int($1 / 1000); printf "[%02d:%02d:%02d] %s: %s\n", s / 3600, s % 3600 / 60, s % 60, $2, $3 }' >"$base.txt"
+echo "Transcript: $base.txt"
