@@ -51,12 +51,21 @@ turns = [(t.start * 1000, t.end * 1000, t.speaker) for t in sd.process(np.frombu
 
 
 def speaker(start, end):
-    """Speaker with the most overlap with this transcript row."""
-    overlap = {}
+    """Speaker covering most of this transcript row.
+
+    Overlapping speech: the main speaker's long turn and a short interjection can both cover the
+    row fully, so among speakers covering ~as much as the best, the shorter (more specific) turn wins.
+    """
+    cover, shortest = {}, {}
     for s, e, spk in turns:
-        overlap[spk] = overlap.get(spk, 0) + max(0, min(end, e) - max(start, s))
-    best = max(overlap, key=overlap.get, default=None)
-    return chr(65 + best) if best is not None and overlap[best] > 0 else "?"
+        o = max(0, min(end, e) - max(start, s))
+        if o:
+            cover[spk] = cover.get(spk, 0) + o
+            shortest[spk] = min(shortest.get(spk, e - s), e - s)
+    if not cover:
+        return "?"
+    top = max(cover.values())
+    return chr(65 + min((k for k in cover if cover[k] >= 0.9 * top), key=shortest.get))
 
 
 header, *rows = tsv.read_text().splitlines()
